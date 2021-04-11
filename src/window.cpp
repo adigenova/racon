@@ -12,7 +12,7 @@
 
 namespace racon {
 
-std::shared_ptr<Window> createWindow(uint64_t id, uint32_t rank, WindowType type,
+std::shared_ptr<Window> createWindow(uint64_t id, uint32_t rank, uint32_t pos, WindowType type,
     const char* backbone, uint32_t backbone_length, const char* quality,
     uint32_t quality_length) {
 
@@ -22,13 +22,13 @@ std::shared_ptr<Window> createWindow(uint64_t id, uint32_t rank, WindowType type
         exit(1);
     }
 
-    return std::shared_ptr<Window>(new Window(id, rank, type, backbone,
+    return std::shared_ptr<Window>(new Window(id, rank, pos,  type, backbone,
         backbone_length, quality, quality_length));
 }
 
-Window::Window(uint64_t id, uint32_t rank, WindowType type, const char* backbone,
+Window::Window(uint64_t id, uint32_t rank, uint32_t pos, WindowType type, const char* backbone,
     uint32_t backbone_length, const char* quality, uint32_t quality_length)
-        : id_(id), rank_(rank), type_(type), consensus_(), sequences_(),
+        : id_(id), rank_(rank), pos_(pos), type_(type), consensus_(), sequences_(),
         qualities_(), positions_() {
 
     sequences_.emplace_back(backbone, backbone_length);
@@ -66,6 +66,12 @@ bool Window::generate_consensus(std::shared_ptr<spoa::AlignmentEngine> alignment
     bool trim) {
 
     if (sequences_.size() < 3) {
+        consensus_ = std::string(sequences_.front().first, sequences_.front().second);
+        return false;
+    }
+
+    //we do not polish the window, this return the backbone sequence
+    if(!polish_){
         consensus_ = std::string(sequences_.front().first, sequences_.front().second);
         return false;
     }

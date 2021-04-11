@@ -262,7 +262,7 @@ void Polisher::initialize() {
                 id_to_id[sequences_size << 1 | 0] = i - n;
             }
         }
-
+        fprintf(stderr, "[racon::Polisher::load_seqs] num_seqs: %llu\n",l);
         shrinkToFit(sequences_, l);
     }
 
@@ -389,7 +389,7 @@ void Polisher::initialize() {
             uint32_t length = std::min(j + window_length_,
                 static_cast<uint32_t>(sequences_[i]->data().size())) - j;
 
-            windows_.emplace_back(createWindow(i, k, window_type,
+            windows_.emplace_back(createWindow(i, k, j, window_type,
                 &(sequences_[i]->data()[j]), length,
                 sequences_[i]->quality().empty() ? &(dummy_quality_[0]) :
                 &(sequences_[i]->quality()[j]), length));
@@ -484,7 +484,7 @@ void Polisher::find_overlap_breaking_points(std::vector<std::unique_ptr<Overlap>
 }
 
 void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
-    bool drop_unpolished_sequences) {
+    bool drop_unpolished_sequences, bool target_regions) {
 
     logger_->log();
 
@@ -502,12 +502,30 @@ void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
     uint32_t num_polished_windows = 0;
 
     uint64_t logger_step = thread_futures.size() / 20;
+    std::vector<bede> bed_regions;
+    auto wstart = 0, wend = 0;
 
     for (uint64_t i = 0; i < thread_futures.size(); ++i) {
         thread_futures[i].wait();
 
         num_polished_windows += thread_futures[i].get() == true ? 1 : 0;
+
+        if (windows_[i]->polish() && target_regions) {
+            wstart = polished_data.length();
+        }
+
         polished_data += windows_[i]->consensus();
+
+        if (windows_[i]->polish() && target_regions) {
+            wend = polished_data.length();
+            //std::cerr <<"NWD\t"<< sequences_[windows_[i]->id()]->name() << "\t" << wstart << "\t" << wend << std::endl;
+            bede entry;
+            entry.id = sequences_[windows_[i]->id()]->name();
+            entry.start = wstart;
+            entry.end = wend;
+            bed_regions.emplace_back(entry);
+        }
+
 
         if (i == windows_.size() - 1 || windows_[i + 1]->rank() == 0) {
             double polished_ratio = num_polished_windows /
@@ -540,6 +558,97 @@ void Polisher::polish(std::vector<std::unique_ptr<Sequence>>& dst,
 
     std::vector<std::shared_ptr<Window>>().swap(windows_);
     std::vector<std::unique_ptr<Sequence>>().swap(sequences_);
+
+    //we print the new window locations
+    if (target_regions) {
+        for (auto &b:bed_regions)
+            std::cerr << "NWD\t" << b.id << "\t" << b.start << "\t" << b.end << "\t" << b.end <<std::endl;
+    }
 }
+
+//function to mark which windows should be polished using a bed file
+    void Polisher::mark_windows_to_polish(const std::string &bed_file) {
+
+        //we mark all the windows as to not polish
+        for(auto &w:windows_){
+            //fprintf(stderr,"%llu %d %d %d\n",w->id(),w->rank(), w->pos(), w->polish());
+            w->set_polish(false);
+        }
+        //sequences to process
+        uint64_t targets_size = sequences_.size();
+        std::vector<uint64_t> id_to_first_window_id(targets_size + 1, 0);
+        std::unordered_map<std::string,uint32_t> name2id;
+        for (uint64_t i = 0; i < targets_size; ++i) {
+            uint32_t k = 0;
+            for (uint32_t j = 0; j < sequences_[i]->data().size(); j += window_length_, ++k) {
+            }
+            //hash for seq names
+            name2id[sequences_[i]->name()]=i;
+            id_to_first_window_id[i + 1] = id_to_first_window_id[i] + k;
+        }
+
+
+        //we load the sequences that do not need polishing
+        // Parse bed file
+        std::ifstream ifi;
+        ifi.open(bed_file, std::fstream::in);
+        std::string line;
+
+        std::vector<bede> bed_regions;
+        char separator='\t';
+        std::vector<std::string> results;
+
+        while (std::getline(ifi, line)){
+            std::string::const_iterator start = line.begin();
+            std::string::const_iterator end = line.end();
+            std::string::const_iterator next = std::find( start, end, separator);
+            uint32_t counter=0;
+            while ( next != end ) {
+                results.push_back( std::string( start, next )  );
+                start = next + 1;
+                next = std::find( start, end, separator );
+                counter++;
+                //currently we are using the first 10 columms of the SAM
+                if(counter > 3){
+                    break;
+                }
+            }
+            //we check that the bed is coorectly parsed
+            assert(results.size()>=3);
+            //we create the bede object
+            bede entry;
+            entry.id=results[0];
+            entry.start=atoi(results[1].c_str());
+            entry.end=atoi(results[2].c_str());
+            bed_regions.push_back(entry);
+            //std::cout << results[0] <<" " <<results[1]<<" "<<results[2]<<std::endl;
+            //std::cout << results[0] <<" " <<results[1]<<std::endl;
+            //we erase the current results
+            results.erase(results.begin(),results.end());
+        }
+
+
+        /*for(auto &w:windows_){
+            //std::cout << wi
+            fprintf(stderr,"%llu %d %d %d\n",w->id(),w->rank(), w->pos(), w->polish());
+        }*/
+        //we create the interval tree to check the objects
+        //works for a single chromosome
+        for(auto &b: bed_regions){
+            //fprintf(stderr,"%s %d %d %d %d\n",b.id.c_str(),b.start, b.end, b.start/window_length_,b.end/window_length_);
+            //windows_[b.start/window_length_]->set_polish(true);
+            auto ws=id_to_first_window_id[name2id[b.id]]+b.start/window_length_; //based on seqid
+            auto we=id_to_first_window_id[name2id[b.id]]+b.end/window_length_; //based on seqid
+            //we mark the windows to be polished using the window_length
+            for(auto i=ws;i <= we;i++){
+                windows_[i]->set_polish(true);
+            }
+        }
+        //exit(1);
+        /*for(auto &w:windows_){
+            //std::cout << wi
+            fprintf(stderr,"%llu %d %d %d\n",w->id(),w->rank(), w->pos(), w->polish());
+        }*/
+    }
 
 }

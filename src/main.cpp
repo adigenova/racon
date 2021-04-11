@@ -23,6 +23,7 @@ static const int32_t CUDAALIGNER_BAND_WIDTH_INPUT_CODE = 10001;
 static struct option options[] = {
     {"include-unpolished", no_argument, 0, 'u'},
     {"fragment-correction", no_argument, 0, 'f'},
+    {"regions-to-polish", no_argument, 0, 'b'},
     {"window-length", required_argument, 0, 'w'},
     {"quality-threshold", required_argument, 0, 'q'},
     {"error-threshold", required_argument, 0, 'e'},
@@ -60,13 +61,14 @@ int main(int argc, char** argv) {
 
     bool drop_unpolished_sequences = true;
     uint32_t num_threads = 1;
+    bool target_regions= false;
 
     uint32_t cudapoa_batches = 0;
     uint32_t cudaaligner_batches = 0;
     uint32_t cudaaligner_band_width = 0;
     bool cuda_banded_alignment = false;
 
-    std::string optstring = "ufw:q:e:m:x:g:t:h";
+    std::string optstring = "ufw:q:e:m:x:g:t:h:b";
 #ifdef CUDA_ENABLED
     optstring += "bc::";
 #endif
@@ -107,6 +109,9 @@ int main(int argc, char** argv) {
             case 'v':
                 printf("%s\n", version);
                 exit(0);
+            case 'b':
+                target_regions = true;
+                break;
             case 'h':
                 help();
                 exit(0);
@@ -158,8 +163,14 @@ int main(int argc, char** argv) {
 
     polisher->initialize();
 
+    if(target_regions){
+        //we use the bed file to mark windows to be polish
+        polisher->mark_windows_to_polish(input_paths[3]);
+    }
+
+
     std::vector<std::unique_ptr<racon::Sequence>> polished_sequences;
-    polisher->polish(polished_sequences, drop_unpolished_sequences);
+    polisher->polish(polished_sequences, drop_unpolished_sequences, target_regions);
 
     for (const auto& it: polished_sequences) {
         fprintf(stdout, ">%s\n%s\n", it->name().c_str(), it->data().c_str());
@@ -182,6 +193,9 @@ void help() {
         "    <target sequences>\n"
         "        input file in FASTA/FASTQ format (can be compressed with gzip)\n"
         "        containing sequences which will be corrected\n"
+        "    <target_regions_bed>\n"
+        "        input file in BED format \n"
+        "        containing regions which will be polished\n"
         "\n"
         "    options:\n"
         "        -u, --include-unpolished\n"
@@ -189,6 +203,8 @@ void help() {
         "        -f, --fragment-correction\n"
         "            perform fragment correction instead of contig polishing\n"
         "            (overlaps file should contain dual/self overlaps!)\n"
+        "        -b, --regions-to-polish\n"
+        "            perform contig polishing of the given BED file regions\n"
         "        -w, --window-length <int>\n"
         "            default: 500\n"
         "            size of window on which POA is performed\n"

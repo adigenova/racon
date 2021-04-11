@@ -7,10 +7,15 @@
 #pragma once
 
 #include <stdlib.h>
+#include <assert.h>
 #include <vector>
 #include <memory>
 #include <unordered_map>
 #include <thread>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <algorithm>
 
 namespace bioparser {
     template<class T>
@@ -38,6 +43,13 @@ enum class PolisherType {
     kF // Fragment error correction
 };
 
+    //we create a bed entry structure
+    typedef  struct bedentry{
+        std::string id;
+        int start;
+        int end;
+    } bede;
+
 class Polisher;
 std::unique_ptr<Polisher> createPolisher(const std::string& sequences_path,
     const std::string& overlaps_path, const std::string& target_path,
@@ -53,8 +65,10 @@ public:
 
     virtual void initialize();
 
+    void mark_windows_to_polish(const std::string & bed_file);
+
     virtual void polish(std::vector<std::unique_ptr<Sequence>>& dst,
-        bool drop_unpolished_sequences);
+        bool drop_unpolished_sequences, bool target_regions);
 
     friend std::unique_ptr<Polisher> createPolisher(const std::string& sequences_path,
         const std::string& overlaps_path, const std::string& target_path,
